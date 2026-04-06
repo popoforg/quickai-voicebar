@@ -1,0 +1,13 @@
+PyQt5>=5.15.0
+pynput>=1.7.6
+SpeechRecognition>=3.10.0
+pyaudio>=0.2.13
+requests>=2.31.0
+markdown>=3.10
+pygments>=2.20.0
+pyobjc-core>=9.2
+pyobjc-framework-Cocoa>=9.2
+pyobjc-framework-Quartz>=9.2
+modelscope
+funasr_onnx==0.4.1
+librosa==0.11.0
