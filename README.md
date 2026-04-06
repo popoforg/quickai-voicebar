@@ -4,10 +4,12 @@
 
 ## 特性
 
-- 全局快捷键唤醒，像 Spotlight 一样随时呼出
+- 支持双击 `Ctrl` 呼出/隐藏窗口
+- 同时支持 `Ctrl+Shift+A` 呼出/隐藏窗口
 - 按住 `Option` 说话，松开后自动识别
 - 支持键盘输入和多轮对话
 - 支持 Markdown 渲染、代码高亮和代码块复制
+- 点击窗口外部可自动隐藏
 - 托盘常驻运行，支持设置窗口和自定义快捷键
 - 可打包为独立 `.app`
 
@@ -30,6 +32,14 @@ pip install -r requirements.txt
 
 建议使用全新的虚拟环境，不要复用装过 `funasr`、`torch`、`torchaudio` 的旧环境，否则 PyInstaller 很容易把这批大型依赖一起打进 `.app`。
 
+如果你要重新打包，建议单独准备一个干净的构建环境，例如：
+
+```bash
+python3 -m venv venv-build
+source venv-build/bin/activate
+pip install -r requirements.txt
+```
+
 ## 运行
 
 ```bash
@@ -39,11 +49,12 @@ python main.py
 
 ## 使用方式
 
-1. 按全局快捷键呼出对话窗口。
+1. 双击 `Ctrl`，或按 `Ctrl+Shift+A` 呼出对话窗口。
 2. 直接输入内容，或按住 `Option` 开始说话。
 3. 松开 `Option` 完成识别。
 4. 按 `Enter` 发送给 LM Studio。
 5. 回复会以流式方式显示在内容区。
+6. 点击窗口外部可隐藏窗口，再次双击 `Ctrl` 可重新呼出。
 
 ## 权限配置
 
@@ -54,9 +65,11 @@ python main.py
 
 如果你运行的是打包后的 `.app`，需要给 `.app` 本身授权，而不是给终端授权。
 
+如果重打包后热键突然失效，通常是 macOS 把新包视为新的应用实例。此时请到“辅助功能”里删除旧的 `QuickAI` 记录，再重新添加当前的 `dist/QuickAI.app`。
+
 ## 主要配置
 
-配置文件在 [config.py](/Users/rb/Documents/AIProjects/quickai-minimax/config.py)。
+配置文件在 [config.py](/Users/rb/Documents/AIProjects/quickai-voicebar/config.py)。
 
 - `HOTKEY_MODIFIERS` / `HOTKEY_KEY`: 全局快捷键
 - `LMSTUDIO_API_BASE`: LM Studio API 地址
@@ -69,7 +82,7 @@ python main.py
 项目当前使用 PyInstaller 打包：
 
 ```bash
-PYINSTALLER_CONFIG_DIR=.pyinstaller-cache venv/bin/pyinstaller -y QuickAI.spec
+PYINSTALLER_CONFIG_DIR=.pyinstaller-cache venv-build/bin/pyinstaller -y QuickAI.spec
 ```
 
 产物位于：
@@ -78,10 +91,11 @@ PYINSTALLER_CONFIG_DIR=.pyinstaller-cache venv/bin/pyinstaller -y QuickAI.spec
 dist/QuickAI.app
 ```
 
-如果打包出来体积异常大，先确认当前环境里没有额外安装 `funasr`、`torch`、`torchaudio`。这个项目运行语音识别用的是 `funasr_onnx` + `onnxruntime`，不是 PyTorch。
+当前包体积约为 `250MB`。如果打包出来体积异常大，先确认当前环境里没有额外安装 `funasr`、`torch`、`torchaudio`。这个项目运行语音识别用的是 `funasr_onnx` + `onnxruntime`，不是 PyTorch。
 
 ## 常见问题
 
-- 快捷键没反应：确认辅助功能权限已经给到终端或 `.app`
+- 快捷键没反应：确认辅助功能权限已经给到终端或 `.app`；如果是新打包的 `.app`，先删除系统里旧的 `QuickAI` 授权再重新添加
 - 打包后不能录音：确认 `.app` 已获得麦克风权限
 - 没有模型回复：确认 LM Studio 已启动并开启 API
+- 打包后语音识别缺依赖：确认使用的是当前仓库内置的 `funasr_onnx`，并使用干净的构建环境重新打包
