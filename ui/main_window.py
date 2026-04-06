@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout, QPushButton, QLabel, QFrame, QSizePolicy
 )
 from PyQt5.QtCore import Qt, QPropertyAnimation, QRect, QTimer, pyqtSignal, QObject, QSettings, QPoint, QEvent, QSize, QUrl
-from PyQt5.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen, QPainterPath, QDesktopServices
+from PyQt5.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen, QPainterPath, QDesktopServices, QCursor
 import random
 import markdown
 from pygments import highlight
@@ -14,6 +14,7 @@ from pygments.formatters import HtmlFormatter
 from pygments.lexers import TextLexer, get_lexer_by_name
 import config
 from config import WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_OPACITY
+from core.speech_recognizer import app_log
 
 class SignalEmitter(QObject):
     """信号发射器，用于跨线程通信"""
@@ -177,6 +178,9 @@ class MainWindow(QWidget):
         self.response_render_timer = QTimer(self)
         self.response_render_timer.setSingleShot(True)
         self.response_render_timer.timeout.connect(self.flush_pending_render)
+        self.deactivate_hide_timer = QTimer(self)
+        self.deactivate_hide_timer.setSingleShot(True)
+        self.deactivate_hide_timer.timeout.connect(self._hide_if_inactive)
         self.markdown_renderer = markdown.Markdown(
             extensions=["fenced_code", "codehilite", "nl2br", "sane_lists"],
             extension_configs={
@@ -201,6 +205,11 @@ class MainWindow(QWidget):
 
         # 手动跟踪窗口状态
         self._is_window_shown = False
+        self._suppress_deactivate_until = 0.0
+        self._has_activated_since_show = False
+        self._ignore_outside_click_until = 0.0
+        self._global_mouse_monitor = None
+        self._local_mouse_monitor = None
 
         # 读取保存的窗口位置
         self.settings = QSettings("QuickAI", "QuickAI")
@@ -215,14 +224,15 @@ class MainWindow(QWidget):
         self.init_ui()
         self.setup_connections()
         self.setup_signals()
+        self._install_outside_click_monitor()
 
     def init_ui(self):
         """初始化界面"""
-        # 窗口设置 - 恢复Popup属性
+        # 使用普通顶层窗口而不是 Qt.Tool，避免 macOS 在应用失焦时自动隐藏窗口
         self.setWindowFlags(
             Qt.FramelessWindowHint |
             Qt.WindowStaysOnTopHint |
-            Qt.Tool
+            Qt.Window
         )
 
         # 窗口透明设置
@@ -460,6 +470,11 @@ class MainWindow(QWidget):
 
     def show_window(self):
         """显示窗口"""
+        app_log(f"show_window called: shown={self._is_window_shown}, visible={self.isVisible()}")
+        self.deactivate_hide_timer.stop()
+        self._suppress_deactivate_until = time.monotonic() + 0.4
+        self._ignore_outside_click_until = time.monotonic() + 0.35
+        self._has_activated_since_show = False
         self.input_box.clear()
         self.response_area.clear()
         self.response_area.hide() 
@@ -475,6 +490,8 @@ class MainWindow(QWidget):
 
     def hide_window(self):
         """关闭窗口"""
+        app_log(f"hide_window called: shown={self._is_window_shown}, visible={self.isVisible()}")
+        self.deactivate_hide_timer.stop()
         self.saved_position = self.pos()
         self.settings.setValue("window_position", self.saved_position)
         self.settings.setValue("window_size", self.size())
@@ -492,16 +509,25 @@ class MainWindow(QWidget):
     def toggle_visibility(self):
         """切换窗口显示/隐藏 - 直接用_is_window_shown变量"""
         actually_visible = self._is_window_shown and self.isVisible()
+        app_log(
+            f"toggle_visibility called: tracked={self._is_window_shown}, "
+            f"visible={self.isVisible()}, active={QApplication.activeWindow() is self}"
+        )
         self._is_window_shown = actually_visible
         if actually_visible:
-            print("当前窗口是显示的")
+            app_log("toggle_visibility -> hide_window")
             self.hide_window()
         else:
-            print("当前窗口是隐藏的")
+            app_log("toggle_visibility -> show_window")
             self.show_window()
 
     def show_animated(self):
         """带动画显示窗口"""
+        self.deactivate_hide_timer.stop()
+        self._suppress_deactivate_until = time.monotonic() + 0.4
+        self._ignore_outside_click_until = time.monotonic() + 0.35
+        self._has_activated_since_show = False
+        self._activate_app()
         # 使用保存的位置或者默认居中
         screen_geo = QApplication.desktop().availableGeometry()
         if self.saved_position.isNull() or not self._is_position_valid(self.saved_position):
@@ -519,6 +545,8 @@ class MainWindow(QWidget):
         self.input_box.setFocus()
         # MacOS特有的强制激活
         QApplication.setActiveWindow(self)
+        QTimer.singleShot(0, self._activate_app)
+        QTimer.singleShot(50, self._activate_app)
 
         # 动画
         self.animation = QPropertyAnimation(self, b"geometry")
@@ -530,6 +558,63 @@ class MainWindow(QWidget):
         # 初始化状态：允许直接发送消息
         self.is_waiting_for_send = True
         self._is_window_shown = True
+
+    def _activate_app(self):
+        """在 macOS 上把应用重新激活到前台，避免失焦后热键无法再次呼出窗口。"""
+        try:
+            from AppKit import NSApplication, NSApp, NSRunningApplication
+            from Foundation import NSProcessInfo
+
+            app = NSApp() or NSApplication.sharedApplication()
+            if app is not None:
+                app.activateIgnoringOtherApps_(True)
+            current_app = NSRunningApplication.runningApplicationWithProcessIdentifier_(
+                NSProcessInfo.processInfo().processIdentifier()
+            )
+            if current_app is not None:
+                current_app.activateWithOptions_(1 << 1)
+        except Exception:
+            pass
+
+    def _install_outside_click_monitor(self):
+        """监听全局和应用内鼠标点击，点击窗口外部时主动隐藏窗口。"""
+        try:
+            from AppKit import (
+                NSEvent,
+                NSEventMaskLeftMouseDown,
+                NSEventMaskRightMouseDown,
+                NSEventMaskOtherMouseDown,
+            )
+        except Exception as exc:
+            app_log(f"outside click monitor unavailable: {exc!r}")
+            return
+
+        if self._global_mouse_monitor is not None or self._local_mouse_monitor is not None:
+            return
+
+        mask = NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown | NSEventMaskOtherMouseDown
+
+        def local_handler(event):
+            QTimer.singleShot(0, self._hide_if_clicked_outside)
+            return event
+
+        def global_handler(_event):
+            QTimer.singleShot(0, self._hide_if_clicked_outside)
+
+        self._local_mouse_monitor = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(mask, local_handler)
+        self._global_mouse_monitor = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(mask, global_handler)
+        app_log("outside click monitor installed")
+
+    def _hide_if_clicked_outside(self):
+        if not self._is_window_shown or not self.isVisible():
+            return
+        if time.monotonic() < self._ignore_outside_click_until:
+            app_log("outside click ignored during post-show guard window")
+            return
+        if self.frameGeometry().contains(QCursor.pos()):
+            return
+        app_log("outside click detected -> hide_window")
+        self.hide_window()
 
     def _is_position_valid(self, pos):
         """检查位置是否在任意一个屏幕范围内（支持多屏/扩展屏）"""
@@ -582,6 +667,8 @@ class MainWindow(QWidget):
 
     def hideEvent(self, event):
         """窗口隐藏事件，保存位置"""
+        app_log("hideEvent fired")
+        self.deactivate_hide_timer.stop()
         self.saved_position = self.pos()
         self.settings.setValue("window_position", self.saved_position)
         self.settings.setValue("window_size", self.size())
@@ -972,10 +1059,11 @@ class MainWindow(QWidget):
 
     def event(self, event):
         """全局事件处理"""
-        # 捕获窗口停用事件（失去焦点，例如点击了窗口外部）
-        if event.type() == QEvent.WindowDeactivate:
-            if self._is_window_shown:
-                QTimer.singleShot(0, self._hide_if_inactive)
+        if event.type() == QEvent.WindowActivate:
+            self._has_activated_since_show = True
+            app_log(
+                f"WindowActivate: shown={self._is_window_shown}, visible={self.isVisible()}"
+            )
         return super().event(event)
 
     def _get_resize_edges(self, pos):
@@ -1015,10 +1103,8 @@ class MainWindow(QWidget):
         return None
 
     def _hide_if_inactive(self):
-        """失焦后同步隐藏窗口，避免状态与真实显示情况不一致"""
-        active_window = QApplication.activeWindow()
-        if self._is_window_shown and active_window is not self:
-            self.hide_window()
+        """外部点击自动隐藏已禁用，避免影响热键再次呼出。"""
+        app_log("_hide_if_inactive skipped because auto-hide-on-deactivate is disabled")
 
     def _resize_window(self, global_pos):
         delta = global_pos - self.resize_start_global_pos

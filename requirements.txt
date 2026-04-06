@@ -10,4 +10,5 @@ pyobjc-framework-Cocoa>=9.2
 pyobjc-framework-Quartz>=9.2
 modelscope
 funasr_onnx==0.4.1
+jieba>=0.42.1
 librosa==0.11.0

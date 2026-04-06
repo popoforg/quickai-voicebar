@@ -6,9 +6,24 @@ import re
 import time
 import wave
 import tempfile
+from datetime import datetime
+import soundfile as sf
 
 # 设置 ONNX Runtime 多线程并行推理（与 Vocotype 一致）
 os.environ.setdefault("OMP_NUM_THREADS", "8")
+
+
+def app_log(message):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{timestamp}] {message}"
+    print(line)
+    try:
+        log_dir = os.path.expanduser("~/Library/Logs")
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, "QuickAI.log"), "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except Exception:
+        pass
 
 class SpeechRecognizer:
     MIN_RECORD_SECONDS = 0.25
@@ -33,7 +48,7 @@ class SpeechRecognizer:
 
     def _init_model_async(self):
         """后台加载 ONNX 模型（仅从本地缓存加载，下载由弹窗完成）"""
-        print("正在初始化 ONNX 语音引擎...")
+        app_log("正在初始化 ONNX 语音引擎...")
         start_time = time.time()
         
         try:
@@ -59,7 +74,7 @@ class SpeechRecognizer:
                 quantize=use_quantize,
                 intra_op_num_threads=num_threads,
             )
-            print(f"  ASR 模型加载完成 (量化={use_quantize}, 线程={num_threads})")
+            app_log(f"ASR 模型加载完成 (量化={use_quantize}, 线程={num_threads})")
             
             # === 加载标点恢复模型 (CT_Transformer ONNX) ===
             from funasr_onnx.punc_bin import CT_Transformer
@@ -72,11 +87,10 @@ class SpeechRecognizer:
                 quantize=punc_quant,
                 intra_op_num_threads=num_threads,
             )
-            print(f"  标点模型加载完成 (量化={punc_quant})")
+            app_log(f"标点模型加载完成 (量化={punc_quant})")
             
-            # === 预热 librosa（与 Vocotype 一致，避免首次 load 延迟） ===
+            # === 预热音频读取链路，避免首次读取延迟 ===
             try:
-                import librosa
                 fd, tmp_path = tempfile.mkstemp(suffix='.wav')
                 os.close(fd)
                 with wave.open(tmp_path, 'wb') as wf:
@@ -84,9 +98,9 @@ class SpeechRecognizer:
                     wf.setsampwidth(2)
                     wf.setframerate(16000)
                     wf.writeframes(np.zeros(1600, dtype=np.int16).tobytes())
-                librosa.load(tmp_path, sr=16000)
+                sf.read(tmp_path, dtype="float32")
                 os.remove(tmp_path)
-                print("  librosa 预热完成")
+                app_log("音频读取预热完成")
             except Exception:
                 pass
             
@@ -101,17 +115,18 @@ class SpeechRecognizer:
                     wf.writeframes(np.zeros(16000, dtype=np.int16).tobytes())  # 1秒静音
                 self.asr_model([tmp_path])
                 os.remove(tmp_path)
-                print("  ASR 推理预热完成")
+                app_log("ASR 推理预热完成")
             except Exception:
                 pass
             
             elapsed = time.time() - start_time
-            print(f"🚀 ONNX 语音引擎全部就绪！总耗时 {elapsed:.1f}s，极速 Push-To-Talk 模式已激活。")
+            app_log(f"ONNX 语音引擎全部就绪，总耗时 {elapsed:.1f}s")
             
         except Exception as e:
-            print(f"ONNX 语音引擎初始化失败: {e}")
+            app_log(f"ONNX 语音引擎初始化失败: {e!r}")
             import traceback
-            traceback.print_exc()
+            traceback_text = traceback.format_exc()
+            app_log(traceback_text)
 
     def start_listening(self):
         """按下按键时触发，直接开始无脑写入缓存"""
@@ -133,10 +148,12 @@ class SpeechRecognizer:
         self.audio_buffer = []
         
         if not self.asr_model or not buffer_copy:
+            app_log(f"停止录音后未进入识别: asr_model={'ok' if self.asr_model else 'missing'}, buffer_chunks={len(buffer_copy)}")
             return
 
         full_data = b''.join(buffer_copy)
         if not self._should_recognize_audio(full_data):
+            app_log("录音被静音/时长过滤，未送入识别")
             return
 
         # 交给后台线程进行 ONNX 推理，绝对不阻塞 UI
@@ -189,7 +206,7 @@ class SpeechRecognizer:
                 recognized_text = raw_text
                 
         except Exception as e:
-            print(f"ONNX 推理发生错误：{e}")
+            app_log(f"ONNX 推理发生错误: {e!r}")
         finally:
             try:
                 os.remove(tmp_path)
@@ -197,7 +214,7 @@ class SpeechRecognizer:
                 pass
         
         elapsed = time.time() - start
-        print(f"⚡ ONNX 推理完成: {elapsed:.3f}s → \"{recognized_text[:50]}\"")
+        app_log(f"ONNX 推理完成: {elapsed:.3f}s → \"{recognized_text[:50]}\"")
         
         # 后处理：应用配置中的文本清理规则
         if recognized_text:
@@ -245,7 +262,7 @@ class SpeechRecognizer:
 
         rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
         if rms < self.MIN_SPEECH_RMS:
-            print(f"跳过静音/误触音频: duration={duration_seconds:.3f}s, rms={rms:.1f}")
+            app_log(f"跳过静音/误触音频: duration={duration_seconds:.3f}s, rms={rms:.1f}")
             return False
 
         return True

@@ -12,8 +12,8 @@ logging.getLogger("funasr").setLevel(logging.ERROR)
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction
-from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QAction, QMessageBox
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QFont
 from ui.main_window import MainWindow
 from ui.settings_window import SettingsWindow
@@ -119,9 +119,21 @@ def main():
     )
     hotkey_listener.start()
 
+    def notify_hotkey_permission_problem():
+        if not hotkey_listener.start_error:
+            return
+        QMessageBox.warning(
+            None,
+            "全局快捷键不可用",
+            "当前应用没有拿到 macOS 辅助功能权限，所以双击 Ctrl 无法呼出。\n\n"
+            "请到 系统设置 -> 隐私与安全性 -> 辅助功能，删除旧的 QuickAI 记录后，重新添加当前 dist/QuickAI.app 并开启权限，然后重启应用。"
+        )
+
+    QTimer.singleShot(1200, notify_hotkey_permission_problem)
+
     print("="*50)
     print("QuickAI 已启动!")
-    print("快捷键: Cmd+Shift+A 呼出/隐藏窗口")
+    print("快捷键: Ctrl 双击 或 Ctrl+Shift+A 呼出/隐藏窗口")
     print("ESC键: 隐藏窗口")
     print("="*50)
     print("\n首次使用提示:")

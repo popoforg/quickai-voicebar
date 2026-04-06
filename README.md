@@ -28,6 +28,8 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+建议使用全新的虚拟环境，不要复用装过 `funasr`、`torch`、`torchaudio` 的旧环境，否则 PyInstaller 很容易把这批大型依赖一起打进 `.app`。
+
 ## 运行
 
 ```bash
@@ -75,6 +77,8 @@ PYINSTALLER_CONFIG_DIR=.pyinstaller-cache venv/bin/pyinstaller -y QuickAI.spec
 ```bash
 dist/QuickAI.app
 ```
+
+如果打包出来体积异常大，先确认当前环境里没有额外安装 `funasr`、`torch`、`torchaudio`。这个项目运行语音识别用的是 `funasr_onnx` + `onnxruntime`，不是 PyTorch。
 
 ## 常见问题
 
