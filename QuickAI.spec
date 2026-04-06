@@ -45,7 +45,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='QuickAI.app',
-    icon=None,
+    icon='assets/quickai-voicebar.icns',
     bundle_identifier='com.quickai.minimax',
     info_plist={
         'CFBundleDisplayName': 'QuickAI',
